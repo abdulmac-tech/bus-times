@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- iOS Web App Native Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="London Bus Map">
+    <meta name="theme-color" content="#dc2626">
+
+    <title>London TransitWay - Live GPS & TfL Arrivals</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        tfl: {
+                            red: '#dc2626',
+                            darkRed: '#991b1b',
+                            blue: '#1d4ed8',
+                            dark: '#0f172a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        #map-container {
+            cursor: grab;
+        }
+        #map-container:active {
+            cursor: grabbing;
+        }
+
+        /* Custom iOS Style Scrollbars */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(156, 163, 175, 0.4);
+            border-radius: 9999px;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+        }
+        .dark .glass-panel {
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .pulse-ring-blue {
+            box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.6);
+            animation: pulse-ring-blue 2s infinite cubic-bezier(0.66, 0, 0, 1);
+        }
+        @keyframes pulse-ring-blue {
+            to { box-shadow: 0 0 0 22px rgba(37, 99, 235, 0); }
+        }
+
+        .drawer-slide {
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Safe area padding for iOS notch & dynamic island */
+        .pt-safe {
+            padding-top: env(safe-area-inset-top, 12px);
+        }
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom, 12px);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 h-full w-full relative flex flex-col antialiased">
+
+    <!-- Top Floating Header -->
+    <header class="absolute top-0 left-0 right-0 z-30 max-w-lg mx-auto p-3 pt-safe pointer-events-none">
+        <div class="space-y-2 pointer-events-auto">
+            <!-- App Bar -->
+            <div class="glass-panel rounded-2xl shadow-xl p-2.5 flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2.5 pl-1">
+                    <div class="w-9 h-9 rounded-xl bg-red-600 flex items-center justify-center text-white shadow-md shadow-red-600/30">
+                        <i data-lucide="bus" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-1.5">
+                            <h1 class="font-extrabold text-base leading-none tracking-tight">London Transit</h1>
+                            <span class="text-[9px] font-black text-white bg-red-600 px-1.5 py-0.5 rounded-md uppercase">TfL Live</span>
+                        </div>
+                        <span id="gps-status-text" class="text-[10px] font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                            <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Initializing GPS...
+                        </span>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-1">
+                    <button id="btn-near-me-toggle" class="p-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition flex items-center gap-1 text-xs font-bold">
+                        <i data-lucide="navigation-2" class="w-4 h-4 text-blue-600 dark:text-blue-400"></i>
+                        <span class="hidden sm:inline">Near Me</span>
+                    </button>
+                    <button id="btn-planner-toggle" class="p-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition">
+                        <i data-lucide="route" class="w-4 h-4 text-red-600"></i>
+                    </button>
+                    <button id="btn-favorites" class="p-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition">
+                        <i data-lucide="bookmark" class="w-4 h-4"></i>
+                    </button>
+                    <button id="btn-theme-toggle" class="p-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition">
+                        <i data-lucide="moon" class="w-4 h-4 dark:hidden"></i>
+                        <i data-lucide="sun" class="w-4 h-4 hidden dark:block"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- London-wide Search Bar -->
+            <div class="relative glass-panel rounded-2xl shadow-xl">
+                <div class="flex items-center px-3 py-2.5 gap-2">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400"></i>
+                    <input type="text" id="search-input" placeholder="Search bus line (e.g. 12, 38) or stop (e.g. Oxford Circus)..." 
+                        class="w-full bg-transparent text-sm focus:outline-none placeholder-slate-400 font-medium">
+                    <button id="search-clear" class="hidden text-slate-400 hover:text-slate-600 p-1">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+
+                <!-- Live Search Results -->
+                <div id="search-results" class="hidden border-t border-slate-200 dark:border-slate-800 max-h-64 overflow-y-auto p-1.5"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Interactive Canvas Map -->
+    <main class="w-full h-full relative overflow-hidden flex-1" id="map-wrapper">
+        <div id="map-container" class="w-full h-full absolute inset-0 select-none">
+            <svg id="map-svg" class="w-full h-full pointer-events-auto" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <pattern id="grid-light" width="50" height="50" patternUnits="userSpaceOnUse">
+                        <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#e2e8f0" stroke-width="1"/>
+                    </pattern>
+                    <pattern id="grid-dark" width="50" height="50" patternUnits="userSpaceOnUse">
+                        <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#1e293b" stroke-width="1"/>
+                    </pattern>
+                </defs>
+                <rect id="grid-bg" width="100%" height="100%" fill="url(#grid-light)" />
+                
+                <g id="map-layer">
+                    <!-- River Thames Vector -->
+                    <path id="river-thames" d="M -100 680 C 200 660, 450 720, 700 650 C 950 580, 1150 630, 1400 590 C 1650 550, 1900 620, 2200 580" 
+                          fill="none" stroke="#93c5fd" class="dark:stroke-blue-950/80" stroke-width="50" stroke-linecap="round" />
+                    
+                    <g id="routes-group"></g>
+                    <g id="stops-group"></g>
+                    <g id="vehicles-group"></g>
+                    <g id="user-location-group"></g>
+                </g>
+            </svg>
+        </div>
+
+        <!-- Floating Action Buttons (Zoom & Geolocation) -->
+        <div class="absolute right-4 bottom-24 sm:bottom-10 z-20 flex flex-col gap-2 pointer-events-auto">
+            <button id="btn-zoom-in" class="p-3 glass-panel rounded-2xl shadow-xl text-slate-700 dark:text-slate-200 active:scale-95 transition">
+                <i data-lucide="plus" class="w-5 h-5"></i>
+            </button>
+            <button id="btn-zoom-out" class="p-3 glass-panel rounded-2xl shadow-xl text-slate-700 dark:text-slate-200 active:scale-95 transition">
+                <i data-lucide="minus" class="w-5 h-5"></i>
+            </button>
+            <button id="btn-locate" class="p-3 glass-panel rounded-2xl shadow-xl text-blue-600 dark:text-blue-400 active:scale-95 transition flex items-center justify-center relative">
+                <i data-lucide="crosshair" class="w-5 h-5"></i>
+                <span id="gps-active-dot" class="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 animate-ping hidden"></span>
+            </button>
+        </div>
+
+        <!-- Bus Route Quick Filter Pills -->
+        <div class="absolute left-4 bottom-6 right-20 z-20 overflow-x-auto flex items-center gap-2 py-1 no-scrollbar pointer-events-auto" id="line-pills-container"></div>
+    </main>
+
+    <!-- Drawer 1: Live TfL Stop Arrivals Panel -->
+    <div id="stop-details-panel" class="drawer-slide fixed bottom-0 left-0 right-0 z-40 max-w-lg mx-auto transform translate-y-full px-3 pb-3 pb-safe">
+        <div class="glass-panel rounded-3xl shadow-2xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div class="w-12 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3"></div>
+            
+            <div class="flex items-start justify-between mb-3">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-red-600 text-white flex items-center justify-center font-extrabold text-lg shadow-lg shadow-red-600/30" id="stop-code-badge">
+                        BUS
+                    </div>
+                    <div>
+                        <h2 class="font-extrabold text-lg leading-tight" id="stop-name-title">Bus Stop</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 font-medium" id="stop-direction-text">Towards Central London</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1">
+                    <button id="btn-favorite-stop" class="p-2 text-slate-400 hover:text-amber-500 transition rounded-xl">
+                        <i data-lucide="star" class="w-5 h-5"></i>
+                    </button>
+                    <button id="btn-close-stop-panel" class="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition rounded-xl">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- TfL Countdown Live Banner -->
+            <div class="flex items-center justify-between text-xs font-extrabold text-slate-400 mb-2 uppercase tracking-wider">
+                <span class="flex items-center gap-1">
+                    <i data-lucide="wifi" class="w-3.5 h-3.5 text-red-600"></i> Live TfL Feed
+                </span>
+                <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[11px]" id="tfl-data-indicator">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span> Live TfL API
+                </span>
+            </div>
+
+            <!-- Arrivals List -->
+            <div class="space-y-2 max-h-60 overflow-y-auto pr-1" id="stop-arrivals-list">
+                <div class="p-4 text-center text-xs text-slate-400">Loading live arrivals...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drawer 2: Nearby Bus Stops (GPS Locality Drawer) -->
+    <div id="near-me-panel" class="drawer-slide fixed bottom-0 left-0 right-0 z-40 max-w-lg mx-auto transform translate-y-full px-3 pb-3 pb-safe">
+        <div class="glass-panel rounded-3xl shadow-2xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div class="w-12 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3"></div>
+            
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+                        <i data-lucide="map-pin" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h2 class="font-bold text-base leading-none">Bus Stops Near Me</h2>
+                        <span class="text-[10px] text-slate-500 font-semibold" id="near-me-subtitle">Based on phone GPS position</span>
+                    </div>
+                </div>
+                <button id="btn-close-near-me" class="p-1.5 text-slate-400 hover:text-slate-600 transition rounded-xl">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div id="near-me-stops-list" class="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div class="p-4 text-center text-xs text-slate-400">Detecting nearby stops...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drawer 3: London Journey Planner Panel -->
+    <div id="planner-panel" class="drawer-slide fixed bottom-0 left-0 right-0 z-40 max-w-lg mx-auto transform translate-y-full px-3 pb-3 pb-safe">
+        <div class="glass-panel rounded-3xl shadow-2xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div class="w-12 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3"></div>
+            
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-xl bg-red-600 text-white flex items-center justify-center">
+                        <i data-lucide="navigation" class="w-4 h-4"></i>
+                    </div>
+                    <h2 class="font-bold text-base">Greater London Journey Planner</h2>
+                </div>
+                <button id="btn-close-planner" class="p-1.5 text-slate-400 hover:text-slate-600 transition rounded-xl">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Inputs -->
+            <div class="space-y-2 mb-3">
+                <div class="relative flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-emerald-500 absolute left-3 z-10"></div>
+                    <select id="planner-origin" class="w-full pl-8 pr-3 py-2.5 bg-slate-100 dark:bg-slate-800/80 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-red-600">
+                        <option value="">Select origin hub...</option>
+                    </select>
+                </div>
+                <div class="relative flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-red-600 absolute left-3 z-10"></div>
+                    <select id="planner-destination" class="w-full pl-8 pr-3 py-2.5 bg-slate-100 dark:bg-slate-800/80 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-red-600">
+                        <option value="">Select destination hub...</option>
+                    </select>
+                </div>
+            </div>
+
+            <button id="btn-calculate-journey" class="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-red-600/30 active:scale-98 transition flex items-center justify-center gap-2">
+                <i data-lucide="compass" class="w-4 h-4"></i> Plan London Journey
+            </button>
+
+            <!-- Results -->
+            <div id="planner-results" class="mt-3 hidden max-h-48 overflow-y-auto space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- Drawer 4: Favorites Panel -->
+    <div id="favorites-panel" class="drawer-slide fixed bottom-0 left-0 right-0 z-40 max-w-lg mx-auto transform translate-y-full px-3 pb-3 pb-safe">
+        <div class="glass-panel rounded-3xl shadow-2xl p-4 border border-slate-200/80 dark:border-slate-800">
+            <div class="w-12 h-1 bg-slate-300 dark:bg-slate-700 rounded-full mx-auto mb-3"></div>
+            
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="bookmark" class="w-5 h-5 text-amber-500"></i>
+                    <h2 class="font-bold text-base">Bookmarked London Stops</h2>
+                </div>
+                <button id="btn-close-favorites" class="p-1.5 text-slate-400 hover:text-slate-600 transition rounded-xl">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div id="favorites-list" class="space-y-2 max-h-56 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script>
+        // ==========================================
+        // 1. LONDON DATASET & MAP BOUNDS
+        // ==========================================
+        
+        // London Coordinate Bounding Anchor (Trafalgar Square = [650, 520] SVG Canvas)
+        const CANVAS_CENTER_LAT = 51.5080;
+        const CANVAS_CENTER_LON = -0.1280;
+
+        const LONDON_TRANSIT_DATA = {
+            lines: [
+                { id: '9', name: 'Route 9', color: '#dc2626', destination: 'Aldwych / Hammersmith', pathway: [[250, 480], [450, 500], [650, 520], [850, 510], [1050, 490]] },
+                { id: '11', name: 'Route 11', color: '#2563eb', destination: 'Fulham / Liverpool Street', pathway: [[200, 560], [400, 540], [650, 520], [900, 470], [1150, 430]] },
+                { id: '12', name: 'Route 12', color: '#ea580c', destination: 'Oxford Circus / Dulwich', pathway: [[600, 320], [650, 400], [650, 520], [700, 680], [750, 850]] },
+                { id: '24', name: 'Route 24', color: '#0284c7', destination: 'Hampstead / Pimlico', pathway: [[550, 150], [580, 280], [650, 400], [650, 520], [620, 640]] },
+                { id: '38', name: 'Route 38', color: '#16a34a', destination: 'Victoria / Clapton', pathway: [[500, 580], [650, 400], [800, 300], [1050, 220], [1200, 180]] },
+                { id: '73', name: 'Route 73', color: '#9333ea', destination: 'Victoria / Stoke Newington', pathway: [[500, 580], [600, 320], [750, 220], [950, 160]] },
+                { id: '148', name: 'Route 148', color: '#db2777', destination: 'Shepherd’s Bush / Camberwell', pathway: [[250, 400], [400, 420], [650, 520], [720, 620], [800, 750]] },
+                { id: '159', name: 'Route 159', color: '#d97706', destination: 'Oxford Circus / Streatham', pathway: [[600, 320], [650, 520], [680, 620], [680, 800], [650, 950]] },
+                { id: '205', name: 'Route 205', color: '#0891b2', destination: 'Paddington / Bow Church', pathway: [[350, 320], [550, 260], [750, 220], [1050, 280], [1350, 320]] },
+                { id: '390', name: 'Route 390', color: '#4f46e5', destination: 'Archway / Victoria', pathway: [[600, 80], [580, 220], [600, 320], [500, 580]] },
+                { id: '453', name: 'Route 453', color: '#059669', destination: 'Marylebone / Deptford', pathway: [[480, 280], [600, 320], [650, 520], [850, 600], [1150, 680]] },
+                { id: 'C1', name: 'Route C1', color: '#84cc16', destination: 'Victoria / White City', pathway: [[180, 360], [350, 420], [500, 580]] },
+                { id: 'W3', name: 'Route W3', color: '#e11d48', destination: 'Finsbury Park / Northumberland Park', pathway: [[750, 80], [900, 120], [1100, 150]] }
+            ],
+            stops: [
+                { id: 'st-oxford', naptanId: '490000173O', code: 'OP', name: 'Oxford Circus', x: 600, y: 320, lat: 51.5152, lon: -0.1418, lines: ['12', '73', '159', '390', '453'] },
+                { id: 'st-victoria', naptanId: '490000244V', code: 'VC', name: 'Victoria Bus Station', x: 500, y: 580, lat: 51.4965, lon: -0.1447, lines: ['11', '38', '73', '390', 'C1'] },
+                { id: 'st-piccadilly', naptanId: '490000186S', code: 'S', name: 'Piccadilly Circus', x: 650, y: 400, lat: 51.5100, lon: -0.1347, lines: ['9', '12', '148', '159', '38'] },
+                { id: 'st-trafalgar', naptanId: '490000240T', code: 'T', name: 'Trafalgar Square', x: 650, y: 520, lat: 51.5080, lon: -0.1280, lines: ['9', '11', '12', '24', '148', '159', '453'] },
+                { id: 'st-kingscross', naptanId: '490000122E', code: 'E', name: 'King’s Cross St. Pancras', x: 750, y: 220, lat: 51.5308, lon: -0.1238, lines: ['73', '205'] },
+                { id: 'st-camden', naptanId: '490000038CX', code: 'CX', name: 'Camden Town', x: 580, y: 220, lat: 51.5392, lon: -0.1426, lines: ['24', '205', '390'] },
+                { id: 'st-paddington', naptanId: '490000174H', code: 'H', name: 'Paddington Station', x: 350, y: 320, lat: 51.5154, lon: -0.1755, lines: ['205', 'C1'] },
+                { id: 'st-hammersmith', naptanId: '490000097K', code: 'K', name: 'Hammersmith Broadway', x: 250, y: 480, lat: 51.4925, lon: -0.2238, lines: ['9'] },
+                { id: 'st-brixton', naptanId: '490000031P', code: 'P', name: 'Brixton Station', x: 680, y: 800, lat: 51.4626, lon: -0.1145, lines: ['159', '38'] },
+                { id: 'st-stratford', naptanId: '490000223E', code: 'E', name: 'Stratford City Bus Station', x: 1250, y: 280, lat: 51.5416, lon: -0.0034, lines: ['205', '38'] },
+                { id: 'st-greenwich', naptanId: '490000090G', code: 'G', name: 'Greenwich Town Centre', x: 1150, y: 680, lat: 51.4816, lon: -0.0093, lines: ['453'] },
+                { id: 'st-waterloo', naptanId: '490000254W', code: 'W', name: 'Waterloo Station', x: 700, y: 580, lat: 51.5033, lon: -0.1123, lines: ['12', '148', '453'] },
+                { id: 'st-elephant', naptanId: '490000077A', code: 'A', name: 'Elephant & Castle', x: 720, y: 640, lat: 51.4947, lon: -0.1005, lines: ['12', '148', '159'] },
+                { id: 'st-euston', naptanId: '490000078AZ', code: 'AZ', name: 'Euston Bus Station', x: 650, y: 260, lat: 51.5281, lon: -0.1337, lines: ['73', '205', '390'] }
+            ]
+        };
+
+        // Vehicles Simulation
+        let vehicles = [
+            { id: 'v-9-1', lineId: '9', progress: 0.2, speed: 0.0004, direction: 1 },
+            { id: 'v-11-1', lineId: '11', progress: 0.5, speed: 0.0005, direction: 1 },
+            { id: 'v-12-1', lineId: '12', progress: 0.1, speed: 0.0006, direction: 1 },
+            { id: 'v-24-1', lineId: '24', progress: 0.35, speed: 0.0005, direction: 1 },
+            { id: 'v-38-1', lineId: '38', progress: 0.8, speed: 0.0004, direction: -1 },
+            { id: 'v-73-1', lineId: '73', progress: 0.4, speed: 0.0006, direction: 1 },
+            { id: 'v-148-1', lineId: '148', progress: 0.6, speed: 0.0005, direction: 1 },
+            { id: 'v-159-1', lineId: '159', progress: 0.3, speed: 0.0007, direction: 1 },
+            { id: 'v-205-1', lineId: '205', progress: 0.5, speed: 0.0004, direction: 1 },
+            { id: 'v-390-1', lineId: '390', progress: 0.2, speed: 0.0006, direction: 1 },
+            { id: 'v-453-1', lineId: '453', progress: 0.45, speed: 0.0005, direction: -1 }
+        ];
+
+        // State Management
+        let mapState = {
+            panX: -150,
+            panY: -100,
+            zoom: 0.9,
+            isDragging: false,
+            startX: 0,
+            startY: 0,
+            activeLineFilter: null,
+            selectedStopId: null,
+            favorites: JSON.parse(localStorage.getItem('london_bus_favs') || '[]'),
+            userGps: null // { lat, lon, x, y, accuracy }
+        };
+
+        // DOM Elements
+        const mapLayer = document.getElementById('map-layer');
+        const routesGroup = document.getElementById('routes-group');
+        const stopsGroup = document.getElementById('stops-group');
+        const vehiclesGroup = document.getElementById('vehicles-group');
+        const userLocGroup = document.getElementById('user-location-group');
+        const mapContainer = document.getElementById('map-container');
+        
+        const stopDetailsPanel = document.getElementById('stop-details-panel');
+        const nearMePanel = document.getElementById('near-me-panel');
+        const plannerPanel = document.getElementById('planner-panel');
+        const favoritesPanel = document.getElementById('favorites-panel');
+
+        // ==========================================
+        // 2. LIVE GPS GEOLOCATION SYSTEM
+        // ==========================================
+
+        function latLonToCanvas(lat, lon) {
+            // Converts London Lat/Lon into SVG Canvas Relative Coordinates
+            const latDiff = lat - CANVAS_CENTER_LAT;
+            const lonDiff = lon - CANVAS_CENTER_LON;
+            
+            const x = 650 + (lonDiff * 4800);
+            const y = 520 - (latDiff * 7800);
+            return { x, y };
+        }
+
+        function initGeolocation() {
+            const gpsText = document.getElementById('gps-status-text');
+            const activeDot = document.getElementById('gps-active-dot');
+
+            if (!('geolocation' in navigator)) {
+                gpsText.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> GPS Not Supported`;
+                return;
+            }
+
+            const handlePosition = (pos) => {
+                const { latitude, longitude, accuracy } = pos.coords;
+                const canvasPos = latLonToCanvas(latitude, longitude);
+
+                mapState.userGps = {
+                    lat: latitude,
+                    lon: longitude,
+                    x: canvasPos.x,
+                    y: canvasPos.y,
+                    accuracy: accuracy
+                };
+
+                gpsText.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> GPS Active (±${Math.round(accuracy)}m)`;
+                activeDot.classList.remove('hidden');
+
+                renderUserLocation();
+            };
+
+            const handleError = (err) => {
+                console.warn('Geolocation error:', err.message);
+                gpsText.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> London Center (Simulated GPS)`;
+                // Default fallback to Trafalgar Square
+                mapState.userGps = { lat: 51.5080, lon: -0.1280, x: 650, y: 520, accuracy: 25 };
+                renderUserLocation();
+            };
+
+            // Watch continuous position for mobile movement
+            navigator.geolocation.watchPosition(handlePosition, handleError, {
+                enableHighAccuracy: true,
+                maximumAge: 5000,
+                timeout: 10000
+            });
+        }
+
+        function renderUserLocation() {
+            if (!mapState.userGps) return;
+            const { x, y, accuracy } = mapState.userGps;
+
+            const accuracyRadius = Math.max(16, Math.min(60, accuracy / 2));
+
+            userLocGroup.innerHTML = `
+                <g transform="translate(${x}, ${y})">
+                    <!-- GPS Accuracy Radius Circle -->
+                    <circle r="${accuracyRadius}" class="fill-blue-500/15 stroke-blue-500/30" stroke-width="1.5" />
+                    <!-- Pulsing User Location Beacon -->
+                    <circle r="14" class="fill-blue-600/30 pulse-ring-blue" />
+                    <circle r="7" fill="#ffffff" stroke="#2563eb" stroke-width="3" />
+                </g>
+            `;
+        }
+
+        document.getElementById('btn-locate').addEventListener('click', () => {
+            if (mapState.userGps) {
+                focusCoordinates(mapState.userGps.x, mapState.userGps.y);
+            } else {
+                navigator.geolocation.getCurrentPosition(
+                    pos => {
+                        const canvasPos = latLonToCanvas(pos.coords.latitude, pos.coords.longitude);
+                        focusCoordinates(canvasPos.x, canvasPos.y);
+                    },
+                    () => focusCoordinates(650, 520) // Trafalgar Square center fallback
+                );
+            }
+        });
+
+        // ==========================================
+        // 3. TfL REAL-TIME API INTEGRATION
+        // ==========================================
+
+        async function fetchLiveTflArrivals(stop) {
+            const arrivalsList = document.getElementById('stop-arrivals-list');
+            const dataIndicator = document.getElementById('tfl-data-indicator');
+            arrivalsList.innerHTML = '<div class="p-4 text-center text-xs text-slate-400 font-medium animate-pulse">Connecting to TfL Live Feed...</div>';
+
+            try {
+                // Fetch real-time arrivals from official TfL Unified API endpoint
+                const naptanId = stop.naptanId || '490000240T';
+                const response = await fetch(`https://api.tfl.gov.uk/StopPoint/${naptanId}/Arrivals`);
+                
+                if (!response.ok) throw new Error('TfL API limit or network fallback');
+                const data = await response.json();
+
+                if (!Array.isArray(data) || data.length === 0) {
+                    throw new Error('No immediate buses broadcasted');
+                }
+
+                // Sort arrivals by lowest timeToStation (ascending)
+                data.sort((a, b) => a.timeToStation - b.timeToStation);
+
+                arrivalsList.innerHTML = '';
+                dataIndicator.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span> TfL Live API`;
+
+                data.slice(0, 8).forEach(arr => {
+                    const lineId = arr.lineId ? arr.lineId.toUpperCase() : 'BUS';
+                    const destination = arr.destinationName || 'Central London';
+                    const timeMins = Math.floor(arr.timeToStation / 60);
+                    const dueText = timeMins <= 0 ? 'Due' : `${timeMins} min`;
+
+                    const lineObj = LONDON_TRANSIT_DATA.lines.find(l => l.id === lineId);
+                    const badgeColor = lineObj ? lineObj.color : '#dc2626';
+
+                    const item = document.createElement('div');
+                    item.className = 'flex items-center justify-between p-2.5 rounded-2xl bg-slate-100/90 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60';
+                    item.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <span class="px-2.5 py-1 rounded-xl text-white font-black text-xs min-w-[42px] text-center" style="background-color: ${badgeColor}">
+                                ${lineId}
+                            </span>
+                            <div>
+                                <div class="text-xs font-bold text-slate-800 dark:text-slate-100">To ${destination}</div>
+                                <div class="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1 font-semibold">
+                                    <i data-lucide="accessibility" class="w-3 h-3 text-emerald-500"></i> Low Floor • Live Bus
+                                </div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs font-extrabold text-red-600 dark:text-red-400">${dueText}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">${arr.expectedArrival ? new Date(arr.expectedArrival).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Live'}</div>
+                        </div>
+                    `;
+                    arrivalsList.appendChild(item);
+                });
+
+                lucide.createIcons();
+
+            } catch (err) {
+                // Fallback to simulated live data if offline or outside TfL bounds
+                console.log('TfL Live API Fallback triggered:', err.message);
+                dataIndicator.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> TfL Live (Simulated)`;
+                renderSimulatedArrivals(stop);
+            }
+        }
+
+        function renderSimulatedArrivals(stop) {
+            const arrivalsList = document.getElementById('stop-arrivals-list');
+            arrivalsList.innerHTML = '';
+
+            stop.lines.forEach(lineId => {
+                const line = LONDON_TRANSIT_DATA.lines.find(l => l.id === lineId);
+                if (!line) return;
+
+                const eta1 = Math.floor(Math.random() * 4) + 1;
+                const eta2 = eta1 + Math.floor(Math.random() * 7) + 5;
+
+                [eta1, eta2].forEach(eta => {
+                    const item = document.createElement('div');
+                    item.className = 'flex items-center justify-between p-2.5 rounded-2xl bg-slate-100/90 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60';
+                    item.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <span class="px-2.5 py-1 rounded-xl text-white font-black text-xs min-w-[42px] text-center" style="background-color: ${line.color}">
+                                ${line.id}
+                            </span>
+                            <div>
+                                <div class="text-xs font-bold text-slate-800 dark:text-slate-100">To ${line.destination}</div>
+                                <div class="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1 font-semibold">
+                                    <i data-lucide="accessibility" class="w-3 h-3 text-emerald-500"></i> Low Floor • Double Decker
+                                </div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs font-extrabold text-red-600 dark:text-red-400">${eta === 1 ? 'Due' : eta + ' mins'}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">${new Date(Date.now() + eta*60000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                        </div>
+                    `;
+                    arrivalsList.appendChild(item);
+                });
+            });
+
+            lucide.createIcons();
+        }
+
+        // ==========================================
+        // 4. MAP TRANSFORM & VECTOR RENDERING
+        // ==========================================
+
+        function updateMapTransform() {
+            mapLayer.setAttribute('transform', `translate(${mapState.panX}, ${mapState.panY}) scale(${mapState.zoom})`);
+        }
+
+        function renderRoutes() {
+            routesGroup.innerHTML = '';
+            LONDON_TRANSIT_DATA.lines.forEach(line => {
+                const isFiltered = mapState.activeLineFilter && mapState.activeLineFilter !== line.id;
+                const opacity = isFiltered ? 0.12 : 0.85;
+                const strokeWidth = (mapState.activeLineFilter === line.id) ? 10 : 6;
+
+                let pathD = `M ${line.pathway[0][0]} ${line.pathway[0][1]}`;
+                for (let i = 1; i < line.pathway.length; i++) {
+                    const prev = line.pathway[i - 1];
+                    const curr = line.pathway[i];
+                    const cx = (prev[0] + curr[0]) / 2;
+                    const cy = (prev[1] + curr[1]) / 2;
+                    pathD += ` Q ${prev[0]} ${prev[1]}, ${cx} ${cy} T ${curr[0]} ${curr[1]}`;
+                }
+
+                const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                pathEl.setAttribute('d', pathD);
+                pathEl.setAttribute('fill', 'none');
+                pathEl.setAttribute('stroke', line.color);
+                pathEl.setAttribute('stroke-width', strokeWidth);
+                pathEl.setAttribute('stroke-linecap', 'round');
+                pathEl.setAttribute('stroke-linejoin', 'round');
+                pathEl.setAttribute('opacity', opacity);
+                pathEl.classList.add('transition-all', 'duration-300', 'cursor-pointer');
+                
+                pathEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleLineFilter(line.id);
+                });
+
+                routesGroup.appendChild(pathEl);
+            });
+        }
+
+        function renderStops() {
+            stopsGroup.innerHTML = '';
+            LONDON_TRANSIT_DATA.stops.forEach(stop => {
+                const isSelected = mapState.selectedStopId === stop.id;
+                const isVisible = !mapState.activeLineFilter || stop.lines.includes(mapState.activeLineFilter);
+                
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('transform', `translate(${stop.x}, ${stop.y})`);
+                g.setAttribute('class', `cursor-pointer transition-all duration-300 ${isVisible ? 'opacity-100' : 'opacity-20'}`);
+
+                const outerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                outerCircle.setAttribute('r', isSelected ? 13 : 9);
+                outerCircle.setAttribute('fill', isSelected ? '#dc2626' : '#ffffff');
+                outerCircle.setAttribute('stroke', isSelected ? '#ffffff' : '#1e293b');
+                outerCircle.setAttribute('stroke-width', '3');
+
+                const innerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                innerCircle.setAttribute('r', '3.5');
+                innerCircle.setAttribute('fill', isSelected ? '#ffffff' : '#dc2626');
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('y', 23);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('class', 'text-[11px] font-extrabold fill-slate-800 dark:fill-slate-100 pointer-events-none drop-shadow-sm');
+                text.textContent = stop.name;
+
+                g.appendChild(outerCircle);
+                g.appendChild(innerCircle);
+                g.appendChild(text);
+
+                g.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectStop(stop);
+                });
+
+                stopsGroup.appendChild(g);
+            });
+        }
+
+        function getPointOnLine(lineId, progress) {
+            const line = LONDON_TRANSIT_DATA.lines.find(l => l.id === lineId);
+            if (!line) return { x: 0, y: 0 };
+            
+            const pts = line.pathway;
+            const totalSegments = pts.length - 1;
+            const scaledProgress = Math.max(0, Math.min(1, progress)) * totalSegments;
+            const index = Math.min(Math.floor(scaledProgress), totalSegments - 1);
+            const segmentT = scaledProgress - index;
+
+            const p1 = pts[index];
+            const p2 = pts[index + 1];
+
+            const x = p1[0] + (p2[0] - p1[0]) * segmentT;
+            const y = p1[1] + (p2[1] - p1[1]) * segmentT;
+
+            return { x, y };
+        }
+
+        function animateVehicles() {
+            vehiclesGroup.innerHTML = '';
+
+            vehicles.forEach(v => {
+                v.progress += v.speed * v.direction;
+                if (v.progress >= 1 || v.progress <= 0) v.direction *= -1;
+
+                const pos = getPointOnLine(v.lineId, v.progress);
+                const line = LONDON_TRANSIT_DATA.lines.find(l => l.id === v.lineId);
+
+                const isVisible = !mapState.activeLineFilter || mapState.activeLineFilter === v.lineId;
+                if (!isVisible) return;
+
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+                g.setAttribute('class', 'cursor-pointer');
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', '-14');
+                rect.setAttribute('y', '-12');
+                rect.setAttribute('width', '28');
+                rect.setAttribute('height', '24');
+                rect.setAttribute('rx', '8');
+                rect.setAttribute('fill', line.color);
+                rect.setAttribute('stroke', '#ffffff');
+                rect.setAttribute('stroke-width', '2');
+
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('dy', '4');
+                label.setAttribute('fill', '#ffffff');
+                label.setAttribute('class', 'text-[10px] font-black pointer-events-none');
+                label.textContent = line.id;
+
+                g.appendChild(rect);
+                g.appendChild(label);
+                
+                g.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleLineFilter(v.lineId);
+                });
+
+                vehiclesGroup.appendChild(g);
+            });
+
+            requestAnimationFrame(animateVehicles);
+        }
+
+        // ==========================================
+        // 5. PAN & ZOOM LISTENERS
+        // ==========================================
+
+        mapContainer.addEventListener('mousedown', (e) => {
+            mapState.isDragging = true;
+            mapState.startX = e.clientX - mapState.panX;
+            mapState.startY = e.clientY - mapState.panY;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!mapState.isDragging) return;
+            mapState.panX = e.clientX - mapState.startX;
+            mapState.panY = e.clientY - mapState.startY;
+            updateMapTransform();
+        });
+
+        window.addEventListener('mouseup', () => mapState.isDragging = false);
+
+        mapContainer.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                mapState.isDragging = true;
+                mapState.startX = e.touches[0].clientX - mapState.panX;
+                mapState.startY = e.touches[0].clientY - mapState.panY;
+            }
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (mapState.isDragging && e.touches.length === 1) {
+                mapState.panX = e.touches[0].clientX - mapState.startX;
+                mapState.panY = e.touches[0].clientY - mapState.startY;
+                updateMapTransform();
+            }
+        });
+
+        window.addEventListener('touchend', () => mapState.isDragging = false);
+
+        mapContainer.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+            const newZoom = Math.min(Math.max(0.4, mapState.zoom * zoomFactor), 2.5);
+            
+            mapState.panX = e.clientX - (e.clientX - mapState.panX) * (newZoom / mapState.zoom);
+            mapState.panY = e.clientY - (e.clientY - mapState.panY) * (newZoom / mapState.zoom);
+            mapState.zoom = newZoom;
+            
+            updateMapTransform();
+        }, { passive: false });
+
+        document.getElementById('btn-zoom-in').addEventListener('click', () => {
+            mapState.zoom = Math.min(mapState.zoom * 1.2, 2.5);
+            updateMapTransform();
+        });
+
+        document.getElementById('btn-zoom-out').addEventListener('click', () => {
+            mapState.zoom = Math.max(mapState.zoom / 1.2, 0.4);
+            updateMapTransform();
+        });
+
+        function focusCoordinates(x, y) {
+            const containerWidth = mapContainer.clientWidth;
+            const containerHeight = mapContainer.clientHeight;
+            mapState.panX = (containerWidth / 2) - (x * mapState.zoom);
+            mapState.panY = (containerHeight / 2) - (y * mapState.zoom);
+            updateMapTransform();
+        }
+
+        // ==========================================
+        // 6. DRAWERS CONTROLLER & NEARBY STOPS
+        // ==========================================
+
+        function closeAllDrawers() {
+            stopDetailsPanel.classList.add('translate-y-full');
+            nearMePanel.classList.add('translate-y-full');
+            plannerPanel.classList.add('translate-y-full');
+            favoritesPanel.classList.add('translate-y-full');
+        }
+
+        function selectStop(stop) {
+            mapState.selectedStopId = stop.id;
+            renderStops();
+            focusCoordinates(stop.x, stop.y);
+
+            document.getElementById('stop-code-badge').textContent = stop.code;
+            document.getElementById('stop-name-title').textContent = stop.name;
+            document.getElementById('stop-direction-text').textContent = `Serviced by Routes ${stop.lines.join(', ')}`;
+
+            // Query TfL Live API
+            fetchLiveTflArrivals(stop);
+            updateStopFavIcon(stop.id);
+
+            closeAllDrawers();
+            stopDetailsPanel.classList.remove('translate-y-full');
+        }
+
+        function openNearMeDrawer() {
+            closeAllDrawers();
+            const listContainer = document.getElementById('near-me-stops-list');
+            listContainer.innerHTML = '';
+
+            const userPos = mapState.userGps || { x: 650, y: 520 };
+
+            // Sort stops by pixel distance to user GPS
+            const sortedStops = [...LONDON_TRANSIT_DATA.stops].map(stop => {
+                const dist = Math.hypot(stop.x - userPos.x, stop.y - userPos.y);
+                const approxMeters = Math.round(dist * 2.5);
+                return { ...stop, distanceMeters: approxMeters };
+            }).sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+            sortedStops.forEach(stop => {
+                const item = document.createElement('div');
+                item.className = 'p-3 rounded-2xl bg-slate-100/90 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 hover:bg-slate-200/60 transition cursor-pointer flex items-center justify-between';
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-xl bg-red-600 text-white font-extrabold text-xs flex items-center justify-center">
+                            ${stop.code}
+                        </div>
+                        <div>
+                            <div class="text-xs font-extrabold text-slate-800 dark:text-slate-100">${stop.name}</div>
+                            <div class="text-[10px] text-slate-500 font-semibold">Routes: ${stop.lines.join(', ')}</div>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs font-black text-blue-600 dark:text-blue-400">${stop.distanceMeters}m</span>
+                        <div class="text-[9px] text-slate-400">away</div>
+                    </div>
+                `;
+                item.onclick = () => selectStop(stop);
+                listContainer.appendChild(item);
+            });
+
+            nearMePanel.classList.remove('translate-y-full');
+        }
+
+        function toggleLineFilter(lineId) {
+            mapState.activeLineFilter = (mapState.activeLineFilter === lineId) ? null : lineId;
+            renderRoutes();
+            renderStops();
+            updateLinePills();
+        }
+
+        function updateLinePills() {
+            const container = document.getElementById('line-pills-container');
+            container.innerHTML = '';
+
+            const allBtn = document.createElement('button');
+            const isAllActive = mapState.activeLineFilter === null;
+            allBtn.className = `px-3 py-1.5 rounded-xl font-bold text-xs shadow-md transition whitespace-nowrap ${
+                isAllActive 
+                    ? 'bg-red-600 text-white' 
+                    : 'glass-panel text-slate-700 dark:text-slate-200'
+            }`;
+            allBtn.textContent = 'All Routes';
+            allBtn.onclick = () => toggleLineFilter(null);
+            container.appendChild(allBtn);
+
+            LONDON_TRANSIT_DATA.lines.forEach(line => {
+                const isActive = mapState.activeLineFilter === line.id;
+                const btn = document.createElement('button');
+                btn.className = `px-3 py-1.5 rounded-xl font-bold text-xs shadow-md transition flex items-center gap-1.5 whitespace-nowrap ${
+                    isActive ? 'ring-2 ring-offset-2 ring-red-600 text-white' : 'glass-panel text-slate-700 dark:text-slate-200'
+                }`;
+                btn.style.backgroundColor = isActive ? line.color : 'transparent';
+                btn.innerHTML = `
+                    <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${line.color}"></span>
+                    ${line.name}
+                `;
+                btn.onclick = () => toggleLineFilter(line.id);
+                container.appendChild(btn);
+            });
+        }
+
+        // ==========================================
+        // 7. SEARCH & JOURNEY PLANNER
+        // ==========================================
+
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+        const searchClear = document.getElementById('search-clear');
+
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase().trim();
+            if (!query) {
+                searchResults.classList.add('hidden');
+                searchClear.classList.add('hidden');
+                return;
+            }
+
+            searchClear.classList.remove('hidden');
+            searchResults.innerHTML = '';
+
+            const matchedLines = LONDON_TRANSIT_DATA.lines.filter(l => l.id.toLowerCase().includes(query) || l.name.toLowerCase().includes(query) || l.destination.toLowerCase().includes(query));
+            const matchedStops = LONDON_TRANSIT_DATA.stops.filter(s => s.name.toLowerCase().includes(query) || s.code.toLowerCase().includes(query));
+
+            if (matchedLines.length === 0 && matchedStops.length === 0) {
+                searchResults.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center font-medium">No London routes or bus stops found</div>`;
+            } else {
+                matchedLines.forEach(line => {
+                    const div = document.createElement('div');
+                    div.className = 'p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer flex items-center gap-2.5';
+                    div.innerHTML = `
+                        <span class="px-2 py-0.5 text-xs font-black text-white rounded-md min-w-[36px] text-center" style="background-color: ${line.color}">${line.id}</span>
+                        <span class="text-xs font-bold text-slate-800 dark:text-slate-100">${line.name} (${line.destination})</span>
+                    `;
+                    div.onclick = () => {
+                        toggleLineFilter(line.id);
+                        searchResults.classList.add('hidden');
+                        searchInput.value = '';
+                    };
+                    searchResults.appendChild(div);
+                });
+
+                matchedStops.forEach(stop => {
+                    const div = document.createElement('div');
+                    div.className = 'p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer flex items-center gap-2.5';
+                    div.innerHTML = `
+                        <span class="w-6 h-6 rounded-lg bg-red-600 text-white text-xs font-black flex items-center justify-center">${stop.code}</span>
+                        <span class="text-xs font-semibold text-slate-800 dark:text-slate-100">${stop.name}</span>
+                    `;
+                    div.onclick = () => {
+                        selectStop(stop);
+                        searchResults.classList.add('hidden');
+                        searchInput.value = '';
+                    };
+                    searchResults.appendChild(div);
+                });
+            }
+
+            searchResults.classList.remove('hidden');
+        });
+
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            searchResults.classList.add('hidden');
+            searchClear.classList.add('hidden');
+        });
+
+        function initPlannerOptions() {
+            const originSelect = document.getElementById('planner-origin');
+            const destSelect = document.getElementById('planner-destination');
+            
+            originSelect.innerHTML = '<option value="">Select origin hub...</option>';
+            destSelect.innerHTML = '<option value="">Select destination hub...</option>';
+
+            LONDON_TRANSIT_DATA.stops.forEach(stop => {
+                const opt1 = document.createElement('option');
+                opt1.value = stop.id;
+                opt1.textContent = `${stop.name} (${stop.code})`;
+                originSelect.appendChild(opt1);
+
+                const opt2 = document.createElement('option');
+                opt2.value = stop.id;
+                opt2.textContent = `${stop.name} (${stop.code})`;
+                destSelect.appendChild(opt2);
+            });
+        }
+
+        document.getElementById('btn-calculate-journey').addEventListener('click', () => {
+            const originId = document.getElementById('planner-origin').value;
+            const destId = document.getElementById('planner-destination').value;
+            const resultsContainer = document.getElementById('planner-results');
+
+            if (!originId || !destId || originId === destId) {
+                resultsContainer.innerHTML = '<div class="p-3 text-xs text-red-500 font-bold text-center">Please select two distinct London hubs.</div>';
+                resultsContainer.classList.remove('hidden');
+                return;
+            }
+
+            const originStop = LONDON_TRANSIT_DATA.stops.find(s => s.id === originId);
+            const destStop = LONDON_TRANSIT_DATA.stops.find(s => s.id === destId);
+
+            const commonLines = originStop.lines.filter(l => destStop.lines.includes(l));
+            resultsContainer.innerHTML = '';
+            
+            if (commonLines.length > 0) {
+                const line = LONDON_TRANSIT_DATA.lines.find(l => l.id === commonLines[0]);
+                const travelTime = Math.floor(Math.abs(originStop.x - destStop.x) / 35) + 6;
+
+                resultsContainer.innerHTML = `
+                    <div class="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">Direct Bus Route</span>
+                            <span class="text-xs font-black text-slate-800 dark:text-slate-100">${travelTime} mins</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2.5 py-0.5 text-xs font-black text-white rounded-md" style="background-color: ${line.color}">${line.id}</span>
+                            <span class="text-xs font-bold">${originStop.name} ➔ ${destStop.name}</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                const travelTime = Math.floor(Math.abs(originStop.x - destStop.x) / 30) + 16;
+                resultsContainer.innerHTML = `
+                    <div class="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-2xl">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-extrabold text-red-600 dark:text-red-400">1 Transfer Connection</span>
+                            <span class="text-xs font-black text-slate-800 dark:text-slate-100">${travelTime} mins</span>
+                        </div>
+                        <div class="text-xs space-y-1 font-semibold text-slate-700 dark:text-slate-300">
+                            <div>1. Board <span class="font-black text-red-600">${originStop.lines[0]}</span> at ${originStop.name}</div>
+                            <div>2. Transfer hub at <span class="font-bold">Trafalgar Square</span></div>
+                            <div>3. Board <span class="font-black text-blue-600">${destStop.lines[0]}</span> to ${destStop.name}</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            resultsContainer.classList.remove('hidden');
+        });
+
+        // ==========================================
+        // 8. BOOKMARKS & FAVORITES
+        // ==========================================
+
+        function updateStopFavIcon(stopId) {
+            const btn = document.getElementById('btn-favorite-stop');
+            const isFav = mapState.favorites.some(f => f.id === stopId);
+            btn.innerHTML = `<i data-lucide="star" class="w-5 h-5 ${isFav ? 'fill-amber-400 text-amber-400' : 'text-slate-400'}"></i>`;
+            lucide.createIcons();
+        }
+
+        document.getElementById('btn-favorite-stop').addEventListener('click', () => {
+            if (!mapState.selectedStopId) return;
+            const index = mapState.favorites.findIndex(f => f.id === mapState.selectedStopId);
+            if (index > -1) {
+                mapState.favorites.splice(index, 1);
+            } else {
+                const stop = LONDON_TRANSIT_DATA.stops.find(s => s.id === mapState.selectedStopId);
+                mapState.favorites.push({ id: stop.id, name: stop.name });
+            }
+            localStorage.setItem('london_bus_favs', JSON.stringify(mapState.favorites));
+            updateStopFavIcon(mapState.selectedStopId);
+            renderFavoritesList();
+        });
+
+        function renderFavoritesList() {
+            const list = document.getElementById('favorites-list');
+            if (mapState.favorites.length === 0) {
+                list.innerHTML = `<p class="text-xs text-slate-400 text-center py-6 font-medium">No saved stops yet. Tap stars on any bus stop to save it here!</p>`;
+                return;
+            }
+
+            list.innerHTML = '';
+            mapState.favorites.forEach(fav => {
+                const item = document.createElement('div');
+                item.className = 'p-3 bg-slate-100 dark:bg-slate-800/60 rounded-2xl flex items-center justify-between cursor-pointer hover:bg-slate-200/60 transition';
+                item.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="map-pin" class="w-4 h-4 text-red-600"></i>
+                        <span class="text-xs font-extrabold">${fav.name}</span>
+                    </div>
+                    <button class="p-1 text-slate-400 hover:text-red-600" onclick="removeFav('${fav.id}', event)">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
+                `;
+                item.onclick = () => {
+                    const stop = LONDON_TRANSIT_DATA.stops.find(s => s.id === fav.id);
+                    if (stop) selectStop(stop);
+                };
+                list.appendChild(item);
+            });
+            lucide.createIcons();
+        }
+
+        window.removeFav = function(id, e) {
+            e.stopPropagation();
+            mapState.favorites = mapState.favorites.filter(f => f.id !== id);
+            localStorage.setItem('london_bus_favs', JSON.stringify(mapState.favorites));
+            renderFavoritesList();
+            if (mapState.selectedStopId === id) updateStopFavIcon(id);
+        };
+
+        // ==========================================
+        // 9. THEME & EVENT INITIALIZATION
+        // ==========================================
+
+        document.getElementById('btn-theme-toggle').addEventListener('click', () => {
+            document.documentElement.classList.toggle('dark');
+            const isDark = document.documentElement.classList.contains('dark');
+            document.getElementById('grid-bg').setAttribute('fill', isDark ? 'url(#grid-dark)' : 'url(#grid-light)');
+        });
+
+        document.getElementById('btn-near-me-toggle').addEventListener('click', openNearMeDrawer);
+        document.getElementById('btn-close-near-me').addEventListener('click', closeAllDrawers);
+
+        document.getElementById('btn-planner-toggle').addEventListener('click', () => {
+            closeAllDrawers();
+            plannerPanel.classList.remove('translate-y-full');
+        });
+
+        document.getElementById('btn-favorites').addEventListener('click', () => {
+            closeAllDrawers();
+            renderFavoritesList();
+            favoritesPanel.classList.remove('translate-y-full');
+        });
+
+        document.getElementById('btn-close-stop-panel').addEventListener('click', closeAllDrawers);
+        document.getElementById('btn-close-planner').addEventListener('click', closeAllDrawers);
+        document.getElementById('btn-close-favorites').addEventListener('click', closeAllDrawers);
+
+        mapContainer.addEventListener('click', (e) => {
+            if (e.target.tagName === 'rect' || e.target.tagName === 'svg') {
+                mapState.selectedStopId = null;
+                renderStops();
+                closeAllDrawers();
+            }
+        });
+
+        window.onload = function() {
+            lucide.createIcons();
+            updateMapTransform();
+            renderRoutes();
+            renderStops();
+            updateLinePills();
+            initPlannerOptions();
+            initGeolocation();
+            animateVehicles();
+        };
+    </script>
+</body>
+</html>
